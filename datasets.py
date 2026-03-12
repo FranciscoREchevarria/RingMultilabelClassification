@@ -33,21 +33,14 @@ def get_augmentation_transforms(num_channels=3):
             scale=(0.9, 1.1),
             interpolation=transforms.InterpolationMode.BILINEAR
         ),
-        # Slight scale/ratio jitter via crop and resize (avoids aggressive crop that could remove rings)
-        transforms.RandomResizedCrop(
-            size=(224, 224),
-            scale=(0.85, 1.0),
-            ratio=(0.95, 1.05),
-            interpolation=transforms.InterpolationMode.BILINEAR,
-        ),
         # Mild photometric jitter to improve robustness to exposure / background variation
         transforms.ColorJitter(
             brightness=0.1,
             contrast=0.1,
             saturation=0.05
-        ),
+        )
         # Optional small erasing to simulate artifacts (low prob and scale)
-        transforms.RandomErasing(p=0.1, scale=(0.02, 0.1)),
+        # transforms.RandomErasing(p=0.1, scale=(0.02, 0.1)),
     ])
 
 class FitsDataset(Dataset):

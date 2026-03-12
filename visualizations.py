@@ -41,7 +41,7 @@ class Visualization:
                         rgb_image = rgb_image.detach().cpu().numpy()
                 else:
                     #apply default lupton rgb transform
-                    rgb_image = Transformations.channels_to_rgb(data[1], data[0], data[2])
+                    rgb_image = Transformations.channels_to_rgb(data)
                 row = i // 5
                 col = i % 5
                 axes[row, col].imshow(rgb_image)
@@ -96,7 +96,7 @@ class Visualization:
             image_tensor = torch.from_numpy(data)
 
             # Always build the default RGB view for consistent visualization.
-            rgb_image = Transformations.channels_to_rgb(data[1], data[0], data[2])
+            rgb_image = Transformations.channels_to_rgb(data)
             transformed_image = transform(image_tensor) if transform else None
             
             if plot_rgb:
@@ -262,26 +262,18 @@ class Visualization:
 
 class Transformations:
     @staticmethod
-    def channels_to_rgb(r, g, z, stretch=0.5, Q=10):
-        """ Convertir los canales en una imágen RGB compuesta.
-
-        Args:
-            r (np.ndarray): Canal rojo.
-            g (np.ndarray): Canal verde.
-            z (np.ndarray): Canal azul.
-
-        Returns:
-            np.ndarray: Imagen RGB compuesta.
+    def channels_to_rgb(image_np, stretch=0.5, Q=10):
         """
-        # Se utiliza la función make_lupton_rgb debido a que ayuda
-        # a manejar el alto rango de imágenes astronómicas controlando
-        # el contraste y la saturación, manteniendo el color.
-        # Convert input channels to float to avoid UFuncTypeError
-        r_float = r.astype(np.float32)
-        g_float = g.astype(np.float32)
-        z_float = z.astype(np.float32)
-        rgb_img = make_lupton_rgb(r_float, g_float, z_float, stretch=stretch, Q=Q)
-        return rgb_img
+        Optimized to accept a single 3-channel array to reduce 
+        indexing and casting overhead.
+        """
+        # Cast the entire block to float32 once; faster than 3 individual casts
+        # if the input is already float32, this is a no-op (copy=False)
+        img = image_np.astype(np.float32, copy=False)
+        
+        # Unpack directly into the lupton function
+        # Note: Lupton traditionally expects (R, G, B) order.
+        return make_lupton_rgb(img[1], img[0], img[2], stretch=stretch, Q=Q)
     
     @staticmethod
     def unsharp_mask(image, sigma=1.0, amount=1.0, threshold=0):
