@@ -200,18 +200,6 @@ class EnsureCHWTransform:
         return image.permute(2, 0, 1) if isinstance(image, torch.Tensor) and image.ndim == 3 and image.shape[-1] == 3 else image
 
 #Apply dynamic rescaling to FITS band data by using asinh
-class AsinhRescaleTransform:
-    def __call__(self, image):
-        # Apply arcsinh scaling to each channel
-        rescaled_channels = []
-        for i in range(image.shape[0]):
-            band = image[i]
-            band = np.nan_to_num(band)  # Handle NaNs
-            band = np.arcsinh(band)  # Apply arcsinh scaling
-            # Normalize to [0, 1]
-            d_min, d_max = band.min(), band.max()
-            if d_max > d_min:
-                band = (band - d_min) / (d_max - d_min)
-            rescaled_channels.append(band.astype(np.float32))
-        
-        return np.stack(rescaled_channels, axis=0)
+class ToTensorIfNumpy:
+    def __call__(self, x):
+        return torch.from_numpy(x) if isinstance(x, np.ndarray) else x
