@@ -242,6 +242,8 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             sampler=sampler,
             num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
         )
 
     def val_dataloader(self):
@@ -249,6 +251,8 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
             self.val_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
         )
 
     def test_dataloader(self):
@@ -256,6 +260,8 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
             self.test_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
         )
     
     def predict_dataloader(self):
@@ -263,4 +269,6 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
             self.predict_ds,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
+            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
         )
