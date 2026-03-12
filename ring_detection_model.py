@@ -8,6 +8,7 @@ using a pretrained Zoobot encoder.
 import torch
 from torch import nn
 import lightning.pytorch as pl
+from timm.loss import AsymmetricLossMultiLabel
 from torchmetrics import Accuracy, F1Score, FBetaScore, Precision, Recall, HammingDistance
 
 
@@ -120,6 +121,10 @@ class RingDetectionZoobot(pl.LightningModule):
         use_focal_loss: bool = False,
         focal_gamma: float = 2.0,
         use_head_batchnorm: bool = False,
+        use_asl: bool = False,
+        asl_gamma_neg: float = 4.0,
+        asl_gamma_pos: float = 0.0,
+        asl_clip: float = 0.05,
         **kwargs,
     ):
         """
@@ -138,13 +143,24 @@ class RingDetectionZoobot(pl.LightningModule):
             use_focal_loss: If True, use focal loss instead of BCE (for hard/rare positives).
             focal_gamma: Gamma for focal loss (default 2.0).
             use_head_batchnorm: If True, add BatchNorm1d after first linear in head.
+            use_asl: If True, use Asymmetric Loss (Ridnik et al., 2021) instead of
+                     BCE/focal. Mutually exclusive with use_focal_loss.
+            asl_gamma_neg: ASL focusing parameter for negatives (higher = more suppression
+                          of easy negatives). Typical range: 2-6.
+            asl_gamma_pos: ASL focusing parameter for positives. Usually 0 (no down-weighting
+                          of hard positives).
+            asl_clip: Probability margin for hard-thresholding easy negatives. Set 0 to disable.
         """
         super().__init__()
+
+        if use_asl and use_focal_loss:
+            raise ValueError("use_asl and use_focal_loss are mutually exclusive")
 
         self.inner_ring_threshold = 0.5
         self.outer_ring_threshold = 0.5
         self.use_focal_loss = use_focal_loss
         self.focal_gamma = focal_gamma
+        self.use_asl = use_asl
         self._pos_weight_tensor = torch.as_tensor(pos_weight, dtype=torch.float32) if pos_weight is not None else None
 
         # Save lightweight hyperparameters for reproducibility / checkpoints
@@ -168,12 +184,16 @@ class RingDetectionZoobot(pl.LightningModule):
         self.head = nn.Sequential(*head_layers)
 
         # Loss and metrics
-        if not use_focal_loss and pos_weight is not None:
+        if use_asl:
+            self.loss_fn = AsymmetricLossMultiLabel(
+                gamma_neg=asl_gamma_neg, gamma_pos=asl_gamma_pos, clip=asl_clip,
+            )
+        elif use_focal_loss:
+            self.loss_fn = None  # computed via _focal_bce_loss in steps
+        elif pos_weight is not None:
             self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=self._pos_weight_tensor)
-        elif not use_focal_loss:
-            self.loss_fn = nn.BCEWithLogitsLoss()
         else:
-            self.loss_fn = None  # use _focal_bce_loss in steps
+            self.loss_fn = nn.BCEWithLogitsLoss()
 
         # Core metrics
         self.train_accuracy = Accuracy(task='multilabel', num_labels=2)
