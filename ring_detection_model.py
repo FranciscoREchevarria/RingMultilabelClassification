@@ -17,13 +17,13 @@ def tune_thresholds_on_val(
     device,
     threshold_range=(0.2, 0.9),
     step=0.02,
-    metric="f2",
+    metric="f1",
 ):
     """
-    Optimize inner and outer ring thresholds independently (per-label) on validation set.
+    Optimize inner and outer ring thresholds jointly on validation set via 2D grid search.
 
-    Each label's threshold is tuned separately to maximize the chosen metric for that label,
-    allowing different recall/precision tradeoffs for inner vs outer rings.
+    Searches over (t_inner, t_outer) pairs to maximize the chosen metric (macro-averaged
+    over both labels), capturing interactions between the two thresholds for multi-label decisions.
 
     Args:
         model: RingDetectionZoobot (or any with predict_proba and inner/outer_ring_threshold).
@@ -31,7 +31,8 @@ def tune_thresholds_on_val(
         device: torch device.
         threshold_range: (low, high) for threshold grid.
         step: Grid step size.
-        metric: Optimization objective per label. 'f2' (recall-weighted) or 'recall'.
+        metric: Optimization objective (macro over labels). 'f1', 'f2' (recall-weighted),
+                'recall', 'precision', or 'hamming'.
 
     Returns:
         (best_t_inner, best_t_outer), and sets model.inner_ring_threshold, model.outer_ring_threshold.
@@ -56,41 +57,36 @@ def tune_thresholds_on_val(
         for k in range(steps)
     ]
 
+    # Macro average over both labels so we have one scalar per (t_inner, t_outer)
     if metric == "recall":
-        rec_metric = Recall(task='multilabel', num_labels=2, average='none')
+        score_metric = Recall(task='multilabel', num_labels=2, average='macro')
     elif metric == "f2":
-        # Default: f2 (weights recall 2x precision)
-        rec_metric = FBetaScore(task='multilabel', num_labels=2, average='none', beta=2.0)
+        score_metric = FBetaScore(task='multilabel', num_labels=2, average='macro', beta=2.0)
     elif metric == "f1":
-        rec_metric = F1Score(task='multilabel', num_labels=2, average='none')
+        score_metric = F1Score(task='multilabel', num_labels=2, average='macro')
     elif metric == "precision":
-        rec_metric = Precision(task='multilabel', num_labels=2, average='none')
+        score_metric = Precision(task='multilabel', num_labels=2, average='macro')
     elif metric == "hamming":
-        rec_metric = HammingDistance(task='multilabel', num_labels=2, average='none')
+        score_metric = HammingDistance(task='multilabel', num_labels=2, average='macro')
     else:
         raise ValueError(f"Unsupported metric: {metric}")
 
+    # Joint 2D grid search over (t_inner, t_outer)
     best_t_inner, best_t_outer = 0.5, 0.5
+    best_score = -1.0
+    minimize_hamming = metric == "hamming"
 
-    # Optimize inner ring threshold (label 0) holding outer at 0.5
-    best_score_inner = -1.0
-    for t in thresholds:
-        preds = (probs > torch.tensor([t, 0.5])).float()
-        rec_metric.reset()
-        score = rec_metric(preds, labels)[0].item()
-        if score > best_score_inner:
-            best_score_inner = score
-            best_t_inner = t
-
-    # Optimize outer ring threshold (label 1) using best_t_inner
-    best_score_outer = -1.0
-    for t in thresholds:
-        preds = (probs > torch.tensor([best_t_inner, t])).float()
-        rec_metric.reset()
-        score = rec_metric(preds, labels)[1].item()
-        if score > best_score_outer:
-            best_score_outer = score
-            best_t_outer = t
+    for t_inner in thresholds:
+        for t_outer in thresholds:
+            preds = (probs > torch.tensor([t_inner, t_outer])).float()
+            score_metric.reset()
+            score = score_metric(preds, labels).item()
+            if minimize_hamming:
+                score = -score  # so we maximize in the same block
+            if score > best_score:
+                best_score = score
+                best_t_inner = t_inner
+                best_t_outer = t_outer
 
     model.inner_ring_threshold = best_t_inner
     model.outer_ring_threshold = best_t_outer
