@@ -1,7 +1,8 @@
+import math
 import numpy as np
 import torch
+from torchvision.transforms.functional import gaussian_blur
 from visualizations import Transformations
-
 
 class LuptonRgbTransform:
     def __init__(self, stretch=0.5, Q=10):
@@ -9,62 +10,46 @@ class LuptonRgbTransform:
         self.Q = Q
         
     def __call__(self, image):
-        # 1. Faster conversion: Use non_blocking if on GPU, 
-        # but numpy() is usually the only way for astropy compatibility.
-        if torch.is_tensor(image):
-            # Using .numpy() on a CPU tensor is a zero-copy operation.
+        if isinstance(image, torch.Tensor):
+            # Transformations.channels_to_rgb expects numpy arrays.
             image_np = image.detach().cpu().numpy()
         else:
             image_np = np.asarray(image)
 
-        # 2. Pass the whole array to avoid redundant Python-level indexing
-        rgb_image = Transformations.channels_to_rgb(
-            image_np, 
-            stretch=self.stretch, 
-            Q=self.Q
-        )
-        
+        rgb_image = Transformations.channels_to_rgb(image_np, stretch=self.stretch, Q=self.Q)
+        #enforce CHW and float32 output
+        rgb_image = np.transpose(rgb_image, (2, 0, 1)).astype(np.float32)
         return torch.from_numpy(rgb_image)
-    
+
+
 # class LuptonRgbTransform:
+#     """Pure-PyTorch Lupton et al. (2004) arcsinh RGB stretch.
+
+#     Reproduces astropy's AsinhMapping formula:
+#         soften = Q / stretch
+#         slope  = 0.1 / arcsinh(0.1 * Q)          (normalized so I=1 -> ~1)
+#         fac    = arcsinh(I * soften) * slope / I   (per-pixel)
+#         out    = band * fac, clipped to [0, 1]
+
+#     Outputs float32 CHW [0, 1] directly (no uint8 intermediate).
+#     """
+
 #     def __init__(self, stretch=0.5, Q=10):
 #         self.stretch = stretch
 #         self.Q = Q
-        
+#         self._soften = Q / stretch
+#         self._slope = 0.1 / math.asinh(0.1 * Q)
+
+#     @torch.no_grad()
 #     def __call__(self, image):
-#         if isinstance(image, torch.Tensor):
-#             # Transformations.channels_to_rgb expects numpy arrays.
-#             image_np = image.detach().cpu().numpy()
-#         else:
-#             image_np = np.asarray(image)
+#         # image: (3, H, W) float32, channels = [r, g, z]
+#         # Reorder to [g, r, z] to match astropy make_lupton_rgb(R=g, G=r, B=z)
+#         image = image[[1, 0, 2]]
+#         intensity = image.mean(dim=0)
+#         safe_I = intensity.clamp(min=1e-10)
+#         fac = (torch.arcsinh(intensity * self._soften) * self._slope / safe_I).unsqueeze(0)
+#         return (image * fac).clamp(0, 1)
 
-#         g_band, r_band, z_band = image_np[0], image_np[1], image_np[2]
-#         rgb_image = Transformations.channels_to_rgb(r_band, g_band, z_band, stretch=self.stretch, Q=self.Q)
-#         return torch.from_numpy(rgb_image)
-
-class UnsharpMaskTransform:
-    def __init__(self, sigma=1.0, amount=1.0, threshold=0):
-        self.sigma = sigma
-        self.amount = amount
-        self.threshold = threshold
-    def __call__(self, image):
-        
-        g_band = image[1]
-        r_band = image[0]
-        z_band = image[2]
-
-        _, sharpened_r = Transformations.unsharp_mask(r_band, sigma=self.sigma, amount=self.amount, threshold=self.threshold)
-        _, sharpened_g = Transformations.unsharp_mask(g_band, sigma=self.sigma, amount=self.amount, threshold=self.threshold)
-        _, sharpened_z = Transformations.unsharp_mask(z_band, sigma=self.sigma, amount=self.amount, threshold=self.threshold)
-
-        #combine sharpened channels back into a single ndarray of shape (3, H, W):
-        output = np.stack([sharpened_r, sharpened_g, sharpened_z], axis=0)
-
-        return output
-
-import torch
-import torch.nn.functional as F
-from torchvision.transforms.functional import gaussian_blur
 
 class MultiScaleUnsharpMaskTransform:
     def __init__(
@@ -83,123 +68,58 @@ class MultiScaleUnsharpMaskTransform:
 
     @torch.no_grad()
     def __call__(self, image):
-        # Ensure input is a torch tensor on the correct device
-        if not isinstance(image, torch.Tensor):
-            image = torch.from_numpy(image).float()
-        
         device = image.device
-        # image shape: (3, H, W)
-        
-        # Prepare amount boosts per channel: [0, 0, z_boost]
+
         boosts = torch.tensor([0.0, 0.0, self.z_amount_boost], device=device).view(3, 1, 1)
-        
-        # detail_sum will accumulate the high-frequency components
         detail_sum = torch.zeros_like(image)
-        
+
         for sigma, amount, thr in zip(self.sigmas, self.amounts, self.thresholds):
-            # 1. Faster Gaussian Blur (Vectorized over 3 channels at once)
-            # kernel_size is usually ~4 * sigma + 1
             k_size = int(4 * sigma + 1)
-            if k_size % 2 == 0: k_size += 1
-            
+            if k_size % 2 == 0:
+                k_size += 1
+
             blurred = gaussian_blur(image, [k_size, k_size], [sigma, sigma])
-            
-            # 2. Vectorized Unsharp Mask Logic
-            # Formula: detail = (original - blurred)
             diff = image - blurred
-            
-            # Apply thresholding: if |diff| < thr, it's noise, so ignore it
             mask = torch.abs(diff) > thr
-            
-            # Broadcast amounts and boosts
             curr_amount = amount + boosts
             detail_sum += diff * mask * curr_amount
 
         out = image + detail_sum
 
-        # 3. Optimized Clipping
-        # Quantile is the Torch equivalent of percentile (0.0 to 1.0)
+        # Percentile clipping via kthvalue — O(n) instead of O(n log n) quantile
         q_low = self.clip_percentiles[0] / 100.0
         q_high = self.clip_percentiles[1] / 100.0
-        
-        # Flatten for quantile calculation
+
         flat_out = out.view(3, -1)
-        lo = torch.quantile(flat_out, q_low, dim=1, keepdim=True).view(3, 1, 1)
-        hi = torch.quantile(flat_out, q_high, dim=1, keepdim=True).view(3, 1, 1)
-        
+        n = flat_out.shape[1]
+        k_low = max(1, int(q_low * n))
+        k_high = min(n, int(q_high * n))
+        lo = torch.kthvalue(flat_out, k_low, dim=1, keepdim=True).values.view(3, 1, 1)
+        hi = torch.kthvalue(flat_out, k_high, dim=1, keepdim=True).values.view(3, 1, 1)
+
         return torch.clamp(out, lo, hi)
-        
-# class MultiScaleUnsharpMaskTransform:
-#     def __init__(
-#         self,
-#         sigmas=(2.5, 5.5),
-#         amounts=(1.0, 2.0),
-#         thresholds=(0.005, 0.002),
-#         clip_percentiles=(0.1, 99.9),
-#         z_amount_boost=0.0,
-#     ):
-#         self.sigmas = sigmas
-#         self.amounts = amounts
-#         self.thresholds = thresholds
-#         self.clip_percentiles = clip_percentiles
-#         self.z_amount_boost = z_amount_boost
 
-#     def _apply_multiscale(self, band2d, amount_boost=0.0):
-#         # base band
-#         #cast tensor to float32 to avoid UFuncTypeError in gaussian_filter
-#         base = band2d.astype(np.float32, copy=False) if not isinstance(band2d, torch.Tensor) else band2d.detach().cpu().numpy().astype(np.float32, copy=False)
-
-#         # build multi-scale detail sum
-#         detail_sum = np.zeros_like(base, dtype=np.float32)
-#         for sigma, amount, thr in zip(self.sigmas, self.amounts, self.thresholds):
-#             _, sharp = Transformations.unsharp_mask(base, sigma=sigma, amount=amount + amount_boost, threshold=thr)
-#             detail_sum += (sharp - base)  # this is the (thresholded) detail mask at that scale
-
-#         out = base + detail_sum
-
-#         # gentle clipping to avoid extreme halos/outliers (optional but helps “not damaging too much”)
-#         lo, hi = np.percentile(out, self.clip_percentiles)
-#         out = np.clip(out, lo, hi)
-#         return out
-
-#     def __call__(self, image):
-#         # your convention: image is (3, H, W) with r,g,z (based on your existing class)
-#         r = image[0]
-#         g = image[1]
-#         z = image[2]
-
-#         r2 = self._apply_multiscale(r, amount_boost=0.0)
-#         g2 = self._apply_multiscale(g, amount_boost=0.0)
-#         z2 = self._apply_multiscale(z, amount_boost=self.z_amount_boost)
-
-#         return np.stack([r2, g2, z2], axis=0)
 
 class SkySubstractTransform:
+    @torch.no_grad()
     def __call__(self, image):
-        g_band = image[1]
-        r_band = image[0]
-        z_band = image[2]
-
-        # Estimate sky background using median of the image
-        sky_g = np.median(g_band)
-        sky_r = np.median(r_band)
-        sky_z = np.median(z_band)
-
-        # Subtract sky background from each channel
-        subtracted_g = g_band - sky_g
-        subtracted_r = r_band - sky_r
-        subtracted_z = z_band - sky_z   
-
-        # Combine subtracted channels back into a single ndarray of shape (3, H, W):
-        output = np.stack([subtracted_r, subtracted_g, subtracted_z], axis=0)
-
-        return output
+        # image: (3, H, W) torch.Tensor
+        sky = image.flatten(1).median(dim=1).values.view(-1, 1, 1)
+        return image - sky
 
 class EnsureCHWTransform:
     def __call__(self, image):
         return image.permute(2, 0, 1) if isinstance(image, torch.Tensor) and image.ndim == 3 and image.shape[-1] == 3 else image
 
-#Apply dynamic rescaling to FITS band data by using asinh
-class ToTensorIfNumpy:
-    def __call__(self, x):
-        return torch.from_numpy(x) if isinstance(x, np.ndarray) else x
+class ScaleToUnitIntervalTransform:
+    def __call__(self, image):
+        if isinstance(image, torch.Tensor):
+            min_val = image.min()
+            max_val = image.max()
+            if max_val > min_val:  # Avoid division by zero
+                return (image - min_val) / (max_val - min_val)
+            else:
+                return image  # If all values are the same, return the original image
+        else:
+            return image
+
