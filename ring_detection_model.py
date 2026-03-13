@@ -7,6 +7,7 @@ using a pretrained Zoobot encoder.
 
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import CosineAnnealingLR, SequentialLR, LinearLR
 import lightning.pytorch as pl
 from timm.loss import AsymmetricLossMultiLabel
 from torchmetrics import Accuracy, F1Score, FBetaScore, Precision, Recall, HammingDistance
@@ -125,6 +126,9 @@ class RingDetectionZoobot(pl.LightningModule):
         asl_gamma_neg: float = 4.0,
         asl_gamma_pos: float = 0.0,
         asl_clip: float = 0.05,
+        scheduler_type: str = "plateau",
+        warmup_epochs: int = 3,
+        eta_min: float = 1e-7,
         **kwargs,
     ):
         """
@@ -150,6 +154,12 @@ class RingDetectionZoobot(pl.LightningModule):
             asl_gamma_pos: ASL focusing parameter for positives. Usually 0 (no down-weighting
                           of hard positives).
             asl_clip: Probability margin for hard-thresholding easy negatives. Set 0 to disable.
+            scheduler_type: LR scheduler strategy. "plateau" for ReduceLROnPlateau (reactive),
+                           "cosine" for CosineAnnealingLR with linear warmup (smooth decay).
+            warmup_epochs: Number of warmup epochs for the cosine scheduler. Ignored when
+                          scheduler_type="plateau".
+            eta_min: Minimum learning rate for cosine annealing. Ignored when
+                    scheduler_type="plateau".
         """
         super().__init__()
 
@@ -208,10 +218,13 @@ class RingDetectionZoobot(pl.LightningModule):
         self.val_recall_macro = Recall(task='multilabel', num_labels=2, average='macro')
         
 
-        # Optimizer hyperparameters
+        # Optimizer / scheduler hyperparameters
         self.encoder_lr = encoder_lr
         self.head_lr = head_lr
         self.weight_decay = weight_decay
+        self.scheduler_type = scheduler_type
+        self.warmup_epochs = warmup_epochs
+        self.eta_min = eta_min
 
         # Track freeze state
         self.encoder_frozen = True
@@ -286,40 +299,54 @@ class RingDetectionZoobot(pl.LightningModule):
     
     def configure_optimizers(self):
         """Configure optimizer with separate parameter groups for head/encoder."""
-        # Head parameters are always trainable
         head_params = [p for p in self.head.parameters() if p.requires_grad]
-
-        # Encoder parameters may be frozen during stage 1
         encoder_params = [p for p in self.encoder.parameters() if p.requires_grad]
 
         if not head_params and not encoder_params:
             raise ValueError("No trainable parameters found!")
 
         param_groups = []
-
         if head_params:
-            param_groups.append(
-                {"params": head_params, "lr": self.head_lr}
-            )
-
+            param_groups.append({"params": head_params, "lr": self.head_lr})
         if encoder_params:
-            param_groups.append(
-                {"params": encoder_params, "lr": self.encoder_lr}
-            )
+            param_groups.append({"params": encoder_params, "lr": self.encoder_lr})
 
         optimizer = torch.optim.AdamW(
             param_groups,
             weight_decay=self.weight_decay,
         )
 
+        if self.scheduler_type == "cosine":
+            max_epochs = self.trainer.max_epochs
+            warmup_epochs = min(self.warmup_epochs, max_epochs - 1)
+            cosine_epochs = max(1, max_epochs - warmup_epochs)
+
+            warmup = LinearLR(
+                optimizer, start_factor=0.3, total_iters=warmup_epochs,
+            )
+            cosine = CosineAnnealingLR(
+                optimizer, T_max=cosine_epochs, eta_min=self.eta_min,
+            )
+            scheduler = SequentialLR(
+                optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs],
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {
+                    "scheduler": scheduler,
+                    "interval": "epoch",
+                },
+            }
+
+        # Default: ReduceLROnPlateau (scheduler_type="plateau")
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=3
+            optimizer, mode="min", factor=0.5, patience=3,
         )
         return {
-            'optimizer': optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'monitor': 'finetuning/val_loss',
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "finetuning/val_loss",
             },
         }
     
