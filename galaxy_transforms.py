@@ -21,36 +21,6 @@ class LuptonRgbTransform:
         rgb_image = np.transpose(rgb_image, (2, 0, 1)).astype(np.float32)
         return torch.from_numpy(rgb_image)
 
-
-# class LuptonRgbTransform:
-#     """Pure-PyTorch Lupton et al. (2004) arcsinh RGB stretch.
-
-#     Reproduces astropy's AsinhMapping formula:
-#         soften = Q / stretch
-#         slope  = 0.1 / arcsinh(0.1 * Q)          (normalized so I=1 -> ~1)
-#         fac    = arcsinh(I * soften) * slope / I   (per-pixel)
-#         out    = band * fac, clipped to [0, 1]
-
-#     Outputs float32 CHW [0, 1] directly (no uint8 intermediate).
-#     """
-
-#     def __init__(self, stretch=0.5, Q=10):
-#         self.stretch = stretch
-#         self.Q = Q
-#         self._soften = Q / stretch
-#         self._slope = 0.1 / math.asinh(0.1 * Q)
-
-#     @torch.no_grad()
-#     def __call__(self, image):
-#         # image: (3, H, W) float32, channels = [r, g, z]
-#         # Reorder to [g, r, z] to match astropy make_lupton_rgb(R=g, G=r, B=z)
-#         image = image[[1, 0, 2]]
-#         intensity = image.mean(dim=0)
-#         safe_I = intensity.clamp(min=1e-10)
-#         fac = (torch.arcsinh(intensity * self._soften) * self._slope / safe_I).unsqueeze(0)
-#         return (image * fac).clamp(0, 1)
-
-
 class MultiScaleUnsharpMaskTransform:
     def __init__(
         self,
