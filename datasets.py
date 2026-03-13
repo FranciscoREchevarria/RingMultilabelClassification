@@ -227,7 +227,7 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
 
         # Inverse-frequency weighting per class
         class_weights = {
-            cls: np.sqrt(1.0 / count) for cls, count in class_counts.items() if count > 0
+            cls: np.sqrt(1.0 / count)for cls, count in class_counts.items() if count > 0
         }
         sample_weights = np.array([class_weights[int(lbl)] for lbl in train_labels], dtype=np.float32)
 
