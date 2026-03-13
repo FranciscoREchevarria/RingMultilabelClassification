@@ -129,7 +129,7 @@ class FitsDataset(Dataset):
         }
 
 class ZoobotFitsDataModule(pl.LightningDataModule):
-    def __init__(self, csv_path, img_dir=None, batch_size=32, num_workers=4, transform_pipeline = None, use_augmentation=False):
+    def __init__(self, csv_path, img_dir=None, batch_size=32, num_workers=4, transform_pipeline = None, use_augmentation=False, sampler_exponent=1.0):
         """
         Args:
             csv_path (str): Path to the catalog CSV.
@@ -138,6 +138,8 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
             num_workers (int): Number of worker processes.
             transform_pipeline (torchvision.transforms, optional): Preprocessing transforms to apply to all datasets.
             use_augmentation (bool): Whether to apply data augmentation to training set.
+            sampler_exponent (float): Exponent for inverse-frequency sampler weights.
+                1.0 = pure inverse-frequency (v31), 0.75 = moderate, 0.5 = sqrt.
         """
         super().__init__()
         self.csv_path = csv_path
@@ -145,6 +147,7 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.use_augmentation = use_augmentation
+        self.sampler_exponent = sampler_exponent
 
         self.transform = transform_pipeline if transform_pipeline else transforms.Compose([transforms.Resize((224, 224), antialias=True), transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
 
@@ -227,7 +230,7 @@ class ZoobotFitsDataModule(pl.LightningDataModule):
 
         # Inverse-frequency weighting per class
         class_weights = {
-            cls: (1/count)**0.75 for cls, count in class_counts.items() if count > 0
+            cls: (1/count)**self.sampler_exponent for cls, count in class_counts.items() if count > 0
         }
         sample_weights = np.array([class_weights[int(lbl)] for lbl in train_labels], dtype=np.float32)
 
