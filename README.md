@@ -28,7 +28,7 @@ Encoder (ConvNeXt Tiny, 27.8M params)
   └─ Linear(256 → 2)   →  [inner_ring_logit, outer_ring_logit]
 ```
 
-Per-label decision thresholds are tuned independently via 2D grid search on the validation set, optimizing macro-averaged F1 over both labels.
+Per-label decision thresholds are tuned independently via 2D grid search on the validation set, optimizing macro-averaged **F2 score** (FBeta with beta=2.0) over both labels. F2 was chosen over F1 to weight recall more heavily than precision, prioritizing the detection of rare ring structures at the cost of slightly more false positives.
 
 ## Image Preprocessing
 
@@ -61,7 +61,7 @@ Defines and visualizes the image transform pipeline (Lupton RGB, optional sky su
 **Stage 1 -- Head-only training (encoder frozen):**
 - Trains only the classification head for up to 10 epochs.
 - Head learning rate: `1e-4`, cosine schedule with 3-epoch warmup.
-- Early stopping on `val_f1_macro` (patience 5).
+- Early stopping on `val_f2_macro` (patience 5).
 - 16-bit mixed precision on GPU.
 
 **Stage 2 -- Full fine-tuning (encoder unfrozen):**
@@ -69,7 +69,7 @@ Defines and visualizes the image transform pipeline (Lupton RGB, optional sky su
 - Encoder learning rate: `5e-6` (20x smaller than head LR) to preserve pretrained representations.
 - Weight decay: `1e-2` for regularization.
 - Trains for up to 30 epochs with early stopping (patience 25).
-- Saves the best checkpoint by `val_f1_macro`.
+- Saves the best checkpoint by `val_f2_macro`.
 
 ### 5. Metrics
 - Loads the best Stage 2 checkpoint and tunes per-label thresholds on the validation set.
@@ -85,14 +85,16 @@ A standalone notebook for side-by-side evaluation of any two training checkpoint
 3. **ROC comparison** -- Overlaid ROC curves (inner ring, outer ring, and micro-average) for both checkpoints with AUC values.
 4. **Confusion matrix comparison** -- Per-label (inner, outer) and combined 4-class confusion matrices displayed side-by-side with row-normalized percentages.
 
-## Final Model (Checkpoint v33)
+## Final Model (Checkpoint v37)
 
-The production model is **version 33** (`lightning_logs/version_33/checkpoints/stage2-best-epoch=20.ckpt`), selected as the best-performing checkpoint after Stage 2 fine-tuning. Optimized decision thresholds:
+The production model is **version 37** (`lightning_logs/version_37/checkpoints/stage2-best-epoch=20.ckpt`), selected as the best-performing checkpoint after Stage 2 fine-tuning. Decision thresholds optimized on the validation set using F2 macro:
 
 | Label      | Threshold |
 |------------|:---------:|
-| Inner Ring |   0.830   |
-| Outer Ring |   0.630   |
+| Inner Ring |   0.580   |
+| Outer Ring |   0.480   |
+
+The lower thresholds compared to earlier F1-tuned checkpoints reflect the F2 objective's emphasis on recall: the model accepts a higher false-positive rate to avoid missing true ring detections.
 
 ## Project Structure
 
