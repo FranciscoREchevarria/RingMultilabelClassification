@@ -11,6 +11,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, SequentialLR, LinearLR
 import lightning.pytorch as pl
 from timm.loss import AsymmetricLossMultiLabel
 from torchmetrics import Accuracy, F1Score, FBetaScore, Precision, Recall, HammingDistance
+from tqdm import tqdm
 
 
 def tune_thresholds_on_val(
@@ -43,10 +44,10 @@ def tune_thresholds_on_val(
     all_probs = []
     all_labels = []
     with torch.no_grad():
-        for batch in val_dataloader:
+        for batch in tqdm(val_dataloader, desc="Tuning thresholds"):
             x = batch['image'].to(device)
             y = batch['ring_class'].to(device)
-            probs = model.predict_proba(x)
+            probs = model.predict_proba_tta(x)
             all_probs.append(probs.cpu())
             all_labels.append(y.cpu())
     probs = torch.cat(all_probs, dim=0)
