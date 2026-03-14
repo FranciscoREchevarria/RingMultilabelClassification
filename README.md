@@ -4,7 +4,8 @@ Multilabel classification of ring structures in galaxy images using a fine-tuned
 
 ## Dataset
 
-The catalog contains **8,346 galaxy images** in FITS format (3-band: r, g, z) sourced from the MaNGA survey. Each galaxy is labeled with a `ring_class`:
+The catalog contains **8,346 galaxy images** in FITS format (3-band: r, g, z) sourced from the[ DESI Legacy Imaging](https://www.legacysurvey.org/dr9/description/) and MaNGA surveys. Each galaxy is labeled with two independent labels: `inner_ring` and `outer_ring`, which are added
+on preprocessing:
 
 | ring_class | Inner Ring | Outer Ring | Description       | Count |
 |:----------:|:----------:|:----------:|-------------------|------:|
@@ -34,7 +35,7 @@ Per-label decision thresholds are tuned independently via 2D grid search on the 
 Raw FITS data passes through an astrophysical preprocessing pipeline before entering the model:
 
 1. **Resize** to 224x224
-2. **Lupton RGB** compositing (`stretch=0.5`, `Q=10`) via `astropy.visualization.make_lupton_rgb`
+2. **Lupton RGB** compositing (`stretch=0.5`, `Q=10`) via [`astropy.visualization.make_lupton_rgb`](https://docs.astropy.org/en/latest/api/astropy.visualization.make_lupton_rgb.html) (see [Lupton et al. (2004)](https://ui.adsabs.harvard.edu/abs/2004PASP..116..133L/abstract))
 3. **Scale to [0, 1]** interval
 
 Training data is further augmented with random horizontal/vertical flips, rotation (up to 180 degrees), small affine translations and scaling, and mild color jitter to exploit the approximate rotational invariance of galaxy morphology.
