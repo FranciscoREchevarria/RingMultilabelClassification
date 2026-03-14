@@ -38,7 +38,8 @@ class Visualization:
                     rgb_image = transform(image_tensor)
                     # Convert Tensor to NumPy array if needed
                     if isinstance(rgb_image, torch.Tensor):
-                        rgb_image = rgb_image.detach().cpu().numpy()
+                        #it must be HWC for plotting, but the transform may output CHW, so we need to permute it back to HWC
+                        rgb_image = rgb_image.permute(1, 2, 0).detach().cpu().numpy()
                 else:
                     #apply default lupton rgb transform
                     rgb_image = Transformations.channels_to_rgb(data)
@@ -176,6 +177,40 @@ class Visualization:
             plt.axis('off')
             plt.show()
             return torch.from_numpy(image_np)
+
+    @staticmethod
+    def plot_rgb_vs_3d(image, transform=None):
+        """ Plotea la imagen RGB y las tres bandas en 3D lado a lado.
+
+        Args:
+            image (torch.Tensor): Tensor de la imagen con forma (C, H, W) o (H, W, C).
+            transform (callable, optional): Función de transformación a aplicar a la imagen. Defaults to None.
+        """
+        if transform:
+            transformed_image = transform(image)
+            if isinstance(transformed_image, torch.Tensor):
+                image_np = transformed_image.detach().cpu().numpy()
+            else:
+                image_np = np.asarray(transformed_image)
+        else:
+            image_np = np.asarray(image, dtype=np.float32)
+        fig = plt.figure(figsize=(20, 7))
+        # Plot RGB image
+        ax1 = fig.add_subplot(121)
+        ax1.imshow(np.transpose(image_np, (1, 2, 0)))  # Convertir de (C, H, W) a (H, W, C)
+        ax1.set_title("Imagen RGB Transformada", fontsize=10)
+        ax1.axis('off')
+        # Plot 3D channels
+        ax2 = fig.add_subplot(122, projection='3d')
+        X, Y = np.meshgrid(np.arange(image_np.shape[2]), np.arange(image_np.shape[1]))
+        for i in range(image_np.shape[0]):
+            ax2.plot_surface(X, Y, image_np[i, :, :], cmap='viridis', alpha=0.5)
+        ax2.set_title("3D Visualization of Image Channels", fontsize=10)
+        ax2.set_xlabel("Width")
+        ax2.set_ylabel("Height")
+        ax2.set_zlabel("Pixel Intensity")
+        plt.tight_layout()
+        plt.show()
             
 
 
@@ -258,6 +293,106 @@ class Visualization:
         print("R channel range:", r.min().min(), "to", r.max().max())
         print("G channel range:", g.min().min(), "to", g.max().max())
         print("Z channel range:", z.min().min(), "to", z.max().max())
+        print("Tensor shape:", tensor.shape)
+
+    @staticmethod
+    def plot_radial_profile(radial_profile, title="Radial Profile", radius=None):
+        """ Plotea el perfil radial de una imagen.
+
+        Args:
+            radial_profile (np.ndarray): Array con el perfil radial calculado.
+            title (str, optional): Título del gráfico. Defaults to "Radial Profile".
+            radius (int, optional): Radio a marcar en el gráfico. Defaults to None.
+        """
+        plt.figure(figsize=(8, 5))
+        plt.plot(radial_profile)
+        if radius is not None:
+            plt.axvline(x=radius, color='r', linestyle='--', label=f'Radius = {radius}')
+            plt.legend()
+        plt.title(title)
+        plt.xlabel("Radius (pixels)")
+        plt.ylabel("Average Intensity")
+        plt.grid()
+        plt.show()
+
+    @staticmethod
+    def calculate_radial_profile(image, radius=None):
+        """ Calcula el perfil radial de una imagen.
+
+        Args:
+            image (torch.Tensor): Tensor de la imagen con forma (H, W).
+            radius (int, optional): Radio máximo para calcular el perfil radial. Defaults to None.
+
+        Returns:
+            np.ndarray: Array con el perfil radial calculado.
+        """
+        if isinstance(image, torch.Tensor):
+            image_np = image.detach().cpu().numpy()
+        else:
+            image_np = np.asarray(image)
+
+        y, x = np.indices(image_np.shape)
+        center_y, center_x = np.array(image_np.shape) / 2
+        r = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+        r = r.astype(int)
+
+        radial_profile = np.bincount(r.ravel(), image_np.ravel()) / np.bincount(r.ravel())
+        if radius is not None:
+            radial_profile = radial_profile[:radius]
+        return radial_profile
+
+    @staticmethod
+    def plot_rgb_with_circles(image, transform=None, radii=None):
+        """ Plotea la imagen RGB con círculos superpuestos.
+
+        Args:
+            image (torch.Tensor): Tensor de la imagen con forma (C, H, W) o (H, W, C).
+            transform (callable, optional): Transformación a aplicar a la imagen antes de plotear. Defaults to None.
+            radii (list of int, optional): Lista de radios para dibujar los círculos. Defaults to None.
+        """
+        if transform:
+            transformed_image = transform(image)
+            if isinstance(transformed_image, torch.Tensor):
+                image_np = transformed_image.detach().cpu().numpy()
+            else:
+                image_np = np.asarray(transformed_image)
+        else:
+            image_np = np.asarray(image, dtype=np.float32)
+
+        plt.figure(figsize=(8, 8))
+        plt.imshow(np.transpose(image_np, (1, 2, 0)))  # Convertir de (C, H, W) a (H, W, C)
+        center_y, center_x = np.array(image_np.shape[1:]) / 2
+        for radius in radii:
+            circle = plt.Circle((center_x, center_y), radius, color='r', fill=False, linestyle='--')
+            plt.gca().add_patch(circle)
+        plt.title("Imagen RGB con Círculos Superpuestos", fontsize=10)
+        plt.axis('off')
+        plt.show()
+
+    @staticmethod
+    def mask_outside_radius(image, radius):
+        """ Enmascara los píxeles fuera de un radio específico.
+
+        Args:
+            image (torch.Tensor): Tensor de la imagen con forma (H, W).
+            radius (int): Radio a partir del cual se enmascararán los píxeles.
+
+        Returns:
+            torch.Tensor: Imagen con los píxeles fuera del radio enmascarados.
+        """
+        if isinstance(image, torch.Tensor):
+            image_np = image.detach().cpu().numpy()
+        else:
+            image_np = np.asarray(image)
+
+        y, x = np.indices(image_np.shape)
+        center_y, center_x = np.array(image_np.shape) / 2
+        r = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+
+        masked_image = np.copy(image_np)
+        masked_image[r > radius] = 0  # Enmascarar píxeles fuera del radio
+
+        return torch.from_numpy(masked_image)
 
 
 class Transformations:
@@ -304,3 +439,5 @@ class Transformations:
         sharpened = image + amount * mask
         
         return blurred, sharpened
+
+    

@@ -216,6 +216,8 @@ class RingDetectionZoobot(pl.LightningModule):
         self.val_precision_macro = Precision(task='multilabel', num_labels=2, average='macro')
         self.train_recall_macro = Recall(task='multilabel', num_labels=2, average='macro')
         self.val_recall_macro = Recall(task='multilabel', num_labels=2, average='macro')
+        self.train_f2_macro = FBetaScore(task='multilabel', num_labels=2, average='macro', beta=2.0)
+        self.val_f2_macro = FBetaScore(task='multilabel', num_labels=2, average='macro', beta=2.0)
         
 
         # Optimizer / scheduler hyperparameters
@@ -265,12 +267,14 @@ class RingDetectionZoobot(pl.LightningModule):
         f1 = self.train_f1_macro(preds, y)
         prec = self.train_precision_macro(preds, y)
         rec = self.train_recall_macro(preds, y)
+        f2 = self.train_f2_macro(preds, y)  # or val_f2_macro
 
         self.log('finetuning/train_loss', loss, on_epoch=True)
         self.log('finetuning/train_acc', acc, on_epoch=True)
         self.log('finetuning/train_f1_macro', f1, on_epoch=True)
         self.log('finetuning/train_precision_macro', prec, on_epoch=True)
         self.log('finetuning/train_recall_macro', rec, on_epoch=True)
+        self.log('finetuning/train_f2_macro', f2, on_epoch=True)
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -289,12 +293,14 @@ class RingDetectionZoobot(pl.LightningModule):
         f1 = self.val_f1_macro(preds, y)
         prec = self.val_precision_macro(preds, y)
         rec = self.val_recall_macro(preds, y)
+        f2 = self.val_f2_macro(preds, y)
 
         self.log('finetuning/val_loss', loss, on_epoch=True)
         self.log('finetuning/val_acc', acc, on_epoch=True)
         self.log('finetuning/val_f1_macro', f1, on_epoch=True)
         self.log('finetuning/val_precision_macro', prec, on_epoch=True)
         self.log('finetuning/val_recall_macro', rec, on_epoch=True)
+        self.log('finetuning/val_f2_macro', f2, on_epoch=True)
         return loss
     
     def configure_optimizers(self):
